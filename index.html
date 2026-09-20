@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>三条背脂モバイル</title>
+<!-- ライブラリは同梱。外部サイトを一切見に行かない -->
+<script src="vendor/aframe.min.js"></script>
+<script src="vendor/aframe-extras.min.js"></script>
+<script src="vendor/mindar-image-aframe.prod.js"></script>
+<script>
+  // 透過動画: 上半分=色・下半分=透け具合 の1本のmp4を、ここで透ける絵に戻す。
+  // （透けるmp4はiPhoneとAndroidで方式が違うので、どちらでも再生できる普通のmp4に詰めてある）
+  AFRAME.registerComponent('packed-alpha-video', {
+    schema: { src: { type: 'selector' } },
+    init() {
+      const tex = new THREE.VideoTexture(this.data.src);
+      tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+      tex.colorSpace = THREE.NoColorSpace;          // 色はそのまま画面へ（暗くならないように）
+      this.material = new THREE.ShaderMaterial({
+        uniforms: { map: { value: tex } },
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+        vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: 'uniform sampler2D map; varying vec2 vUv;' +
+          'void main(){ vec3 c = texture2D(map, vec2(vUv.x, 0.5 + vUv.y * 0.5)).rgb;' +
+          ' float a = texture2D(map, vec2(vUv.x, vUv.y * 0.5)).r;' +
+          ' gl_FragColor = vec4(c, a); }'
+      });
+      const apply = () => { const m = this.el.getObject3D('mesh'); if (m) m.material = this.material; };
+      apply();
+      this.el.addEventListener('object3dset', apply);
+    },
+    tick() { const m = this.el.getObject3D('mesh'); if (m && m.material !== this.material) m.material = this.material; }
+  });
+</script>
+<style>
+  body { margin:0; overflow:hidden; font-family:-apple-system,sans-serif; background:#000; }
+  .a-canvas, canvas.a-canvas, video { filter: blur(0.4px) brightness(1.06) contrast(0.94) saturate(1.1); }
+  #tip { position:fixed; left:0; right:0; bottom:0; z-index:10; background:rgba(0,0,0,.65);
+         color:#fff; text-align:center; padding:12px 10px; font-size:15px; line-height:1.6; }
+  #tip a { color:#8cf; font-size:13px; }
+  #scan { position:fixed; top:50%; left:0; right:0; transform:translateY(-50%); z-index:10;
+          text-align:center; color:#fff; font-size:18px; text-shadow:0 0 6px #000; pointer-events:none; }
+  #soundhint { position:fixed; top:12px; left:0; right:0; z-index:11; text-align:center;
+               color:#fff; font-size:13px; opacity:.85; text-shadow:0 0 6px #000; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="soundhint"></div>
+<div id="scan">カメラを画像に向けて…</div>
+<div id="tip">認識すると画像の上で動画が流れるよ<br><a href="assets/trigger.jpg" target="_blank">▶ トリガー画像を開く</a></div>
+<audio id="bgm" src="assets/sound.mp3" loop preload="auto"></audio>
+<video id="vid" src="assets/video.mp4" preload="auto" loop muted playsinline webkit-playsinline crossorigin="anonymous" style="display:none"></video>
+
+<a-scene
+  mindar-image="imageTargetSrc: assets/targets.mind; autoStart: true; uiScanning: no; uiLoading: no;"
+  color-space="sRGB"
+  renderer="colorManagement: true; physicallyCorrectLights: true"
+  vr-mode-ui="enabled: false"
+  device-orientation-permission-ui="enabled: false">
+
+  <a-assets>
+    
+  </a-assets>
+
+  <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+  <a-entity light="type: ambient; intensity: 1.1"></a-entity>
+  <a-entity light="type: directional; intensity: 0.8" position="1 2 1"></a-entity>
+
+  <a-entity id="target" mindar-image-target="targetIndex: 0">
+    <a-entity id="mesh" geometry="primitive: plane; width: 2.225; height: 1.2516" packed-alpha-video="src: #vid" position="0 0.475 0.001"></a-entity>
+  </a-entity>
+</a-scene>
+
+<script>
+  const HAS_AUDIO = true;       // 別に入れたmp3
+  const IS_VIDEO = true;         // 3Dではなく2D動画を重ねる
+  const VIDEO_SOUND = false;   // 動画そのものの音を出す
+  const scan = document.getElementById('scan');
+  const soundhint = document.getElementById('soundhint');
+  const target = document.getElementById('target');
+  const bgm = document.getElementById('bgm');
+  const vid = document.getElementById('vid');
+  let tracking = false;
+
+  // スマホは「画面に一度触れる」までは音が出せない。触れた瞬間に音の鍵を開けておく
+  if (HAS_AUDIO || VIDEO_SOUND) {
+    soundhint.textContent = '🔊 一度画面をタップすると音が出せます';
+    let unlocked = false;
+    const unlock = () => {
+      if (unlocked) return;
+      const el = HAS_AUDIO ? bgm : vid;
+      if (!el) return;
+      if (!HAS_AUDIO) el.muted = false;
+      el.play().then(() => {
+        if (!tracking) { el.pause(); if (HAS_AUDIO) el.currentTime = 0; }
+        unlocked = true;
+        soundhint.textContent = '🔊 音OK！画像を写すと鳴るよ';
+        setTimeout(() => soundhint.style.display = 'none', 2500);
+      }).catch(() => { if (!HAS_AUDIO) el.muted = true; });
+    };
+    document.body.addEventListener('touchstart', unlock, { once: false });
+    document.body.addEventListener('click', unlock, { once: false });
+  }
+
+  target.addEventListener('targetFound', () => {
+    tracking = true;
+    scan.style.display = 'none';
+    if (IS_VIDEO && vid) vid.play().catch(() => { vid.muted = true; vid.play().catch(() => {}); });
+    if (HAS_AUDIO && bgm) bgm.play().catch(() => {});
+  });
+  target.addEventListener('targetLost', () => {
+    tracking = false;
+    scan.style.display = 'block';
+    if (IS_VIDEO && vid) vid.pause();
+    if (HAS_AUDIO && bgm) bgm.pause();
+  });
+</script>
+</body>
+</html>
